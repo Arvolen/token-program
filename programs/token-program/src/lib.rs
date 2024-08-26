@@ -1,54 +1,72 @@
-use solana_program::{
-    account_info::{next_account_info, AccountInfo},
-    entrypoint,
-    entrypoint::ProgramResult,
-    program_error::ProgramError,
-    pubkey::Pubkey,
-    msg,
-};
-use spl_token::{
-    state::Mint,
-    instruction::{initialize_mint, mint_to},
-};
+use anchor_lang::prelude::*;
+use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
-entrypoint!(process_instruction);
+declare_id!("YourProgramIdHere");
 
-pub fn process_instruction(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo],
-    instruction_data: &[u8],
-) -> ProgramResult {
-    let accounts_iter = &mut accounts.iter();
-    let mint_account = next_account_info(accounts_iter)?;
-    let rent_account = next_account_info(accounts_iter)?;
-    let owner_account = next_account_info(accounts_iter)?;
+#[program]
+pub mod my_token_program {
+    use super::*;
 
-    // Initialize the mint
-    let rent = Rent::from_account_info(rent_account)?;
-    let mint_authority = *owner_account.key;
+    pub fn initialize_mint(ctx: Context<InitializeMint>, decimals: u8) -> Result<()> {
+        let mint = &mut ctx.accounts.mint;
+        mint.decimals = decimals;
+        Ok(())
+    }
 
-    msg!("Initializing the token mint...");
-    initialize_mint(
-        &program_id,
-        &mint_account.key,
-        &mint_authority,
-        None,
-        9, // Decimal places
-    )?;
+    pub fn mint_to(ctx: Context<MintTo>, amount: u64) -> Result<()> {
+        let cpi_accounts = token::MintTo {
+            mint: ctx.accounts.mint.to_account_info(),
+            to: ctx.accounts.token_account.to_account_info(),
+            authority: ctx.accounts.mint_authority.to_account_info(),
+        };
+        let cpi_program = ctx.accounts.token_program.to_account_info();
+        let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
+        token::mint_to(cpi_ctx, amount)?;
+        Ok(())
+    }
 
-    // Mint tokens to the owner's account
-    let mint_to_account = next_account_info(accounts_iter)?;
-    let mint_amount = 1000;
+    pub fn transfer(ctx: Context<TransferTokens>, amount: u64) -> Result<()> {
+        let cpi_accounts = Transfer {
+            from: ctx.accounts.from.to_account_info(),
+            to: ctx.accounts.to.to_account_info(),
+            authority: ctx.accounts.authority.to_account_info(),
+        };
+        let cpi_program = ctx.accounts.token_program.to_account_info();
+        let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
+        token::transfer(cpi_ctx, amount)?;
+        Ok(())
+    }
+}
 
-    msg!("Minting {} tokens to the owner...", mint_amount);
-    mint_to(
-        &program_id,
-        &mint_account.key,
-        &mint_to_account.key,
-        &mint_authority,
-        &[&mint_authority],
-        mint_amount,
-    )?;
+#[derive(Accounts)]
+pub struct InitializeMint<'info> {
+    #[account(init, payer = authority, space = Mint::LEN)]
+    pub mint: Account<'info, Mint>,
+    #[account(mut)]
+    pub authority: Signer<'info>,
+    pub rent: Sysvar<'info, Rent>,
+    pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
+}
 
-    Ok(())
+#[derive(Accounts)]
+pub struct MintTo<'info> {
+    #[account(mut)]
+    pub mint: Account<'info, Mint>,
+    #[account(mut)]
+    pub token_account: Account<'info, TokenAccount>,
+    #[account(signer)]
+    pub mint_authority: AccountInfo<'info>,
+    pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+pub struct TransferTokens<'info> {
+    #[account(mut)]
+    pub from: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub to: Account<'info, TokenAccount>,
+    #[account(signer)]
+    pub authority: AccountInfo<'info>,
+    pub token_program: Program<'info, Token>,
 }
